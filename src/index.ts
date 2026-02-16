@@ -766,6 +766,83 @@ server.tool(
   }
 );
 
+// Get all leads
+server.tool(
+  "get-leads",
+  "Get all leads from Pipedrive with optional filtering by owner, archived status, and limit",
+  {
+    ownerId: z.number().optional().describe("Filter leads by owner/user ID (use get-users tool to find IDs)"),
+    archivedStatus: z.enum(['archived', 'not_archived', 'all']).optional().describe("Filter leads by archived status (default: not_archived)"),
+    limit: z.number().optional().describe("Maximum number of leads to return (default: 500)")
+  },
+  async ({ ownerId, archivedStatus = 'not_archived', limit = 500 }) => {
+    try {
+      const params: any = {
+        limit: limit
+      };
+
+      // Add optional filters
+      if (ownerId) params.owner_id = ownerId;
+      if (archivedStatus !== 'all') {
+        params.archived_status = archivedStatus;
+      }
+
+      // @ts-ignore - getLeads accepts parameters but types may be incomplete
+      const response = await leadsApi.getLeads(params);
+      const leads = response.data || [];
+
+      // Build filter summary
+      const filterSummary = {
+        archived_status: archivedStatus,
+        ...(ownerId && { owner_id: ownerId }),
+        total_leads_found: leads.length,
+        limit_applied: limit
+      };
+
+      // Summarize leads for cleaner output
+      const summarizedLeads = leads.map((lead: any) => ({
+        id: lead.id,
+        title: lead.title,
+        value: lead.value,
+        owner_id: lead.owner_id,
+        owner_name: lead.owner?.name || null,
+        person_id: lead.person_id,
+        person_name: lead.person?.name || null,
+        organization_id: lead.organization_id,
+        organization_name: lead.organization?.name || null,
+        is_archived: lead.is_archived,
+        add_time: lead.add_time,
+        update_time: lead.update_time,
+        source_name: lead.source_name,
+        origin: lead.origin,
+        channel: lead.channel,
+        label_ids: lead.label_ids || []
+      }));
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            summary: `Found ${leads.length} leads matching the specified filters`,
+            filters_applied: filterSummary,
+            total_found: leads.length,
+            leads: summarizedLeads
+          }, null, 2)
+        }]
+      };
+    } catch (error) {
+      console.error("Error fetching leads:", error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error fetching leads: ${getErrorMessage(error)}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
 // Search leads
 server.tool(
   "search-leads",
