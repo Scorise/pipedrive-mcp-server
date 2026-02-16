@@ -769,13 +769,25 @@ server.tool(
 // Get all leads
 server.tool(
   "get-leads",
-  "Get all leads from Pipedrive with optional filtering by owner, archived status, and limit",
+  "Get all leads from Pipedrive with flexible filtering options including search by title, date range, owner, archived status, value, and more. Use 'get-users' tool first to find owner IDs.",
   {
+    searchTitle: z.string().optional().describe("Search leads by title/name (partial matches supported)"),
+    daysBack: z.number().optional().describe("Number of days back to fetch leads based on add_time date (default: 365)"),
     ownerId: z.number().optional().describe("Filter leads by owner/user ID (use get-users tool to find IDs)"),
     archivedStatus: z.enum(['archived', 'not_archived', 'all']).optional().describe("Filter leads by archived status (default: not_archived)"),
+    minValue: z.number().optional().describe("Minimum lead value filter"),
+    maxValue: z.number().optional().describe("Maximum lead value filter"),
     limit: z.number().optional().describe("Maximum number of leads to return (default: 500)")
   },
-  async ({ ownerId, archivedStatus = 'not_archived', limit = 500 }) => {
+  async ({
+    searchTitle,
+    daysBack = 365,
+    ownerId,
+    archivedStatus = 'not_archived',
+    minValue,
+    maxValue,
+    limit = 500
+  }) => {
     try {
       const params: any = {
         limit: limit
@@ -789,12 +801,52 @@ server.tool(
 
       // @ts-ignore - getLeads accepts parameters but types may be incomplete
       const response = await leadsApi.getLeads(params);
-      const leads = response.data || [];
+      let leads = response.data || [];
+
+      // Client-side filtering by date (daysBack)
+      if (!searchTitle && daysBack) {
+        const filterDate = new Date();
+        filterDate.setDate(filterDate.getDate() - daysBack);
+
+        leads = leads.filter((lead: any) => {
+          if (!lead.add_time) return false;
+          const leadAddDate = new Date(lead.add_time);
+          return leadAddDate >= filterDate;
+        });
+      }
+
+      // Filter by search title
+      if (searchTitle) {
+        const searchLower = searchTitle.toLowerCase();
+        leads = leads.filter((lead: any) =>
+          lead.title && lead.title.toLowerCase().includes(searchLower)
+        );
+      }
+
+      // Filter by value range
+      if (minValue !== undefined || maxValue !== undefined) {
+        leads = leads.filter((lead: any) => {
+          const value = lead.value?.amount || 0;
+          if (minValue !== undefined && value < minValue) return false;
+          if (maxValue !== undefined && value > maxValue) return false;
+          return true;
+        });
+      }
+
+      // Apply limit after all filters
+      if (leads.length > limit) {
+        leads = leads.slice(0, limit);
+      }
 
       // Build filter summary
       const filterSummary = {
+        ...(searchTitle && { search_title: searchTitle }),
+        ...(!searchTitle && { days_back: daysBack }),
+        ...(!searchTitle && { filter_date: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }),
         archived_status: archivedStatus,
         ...(ownerId && { owner_id: ownerId }),
+        ...(minValue !== undefined && { min_value: minValue }),
+        ...(maxValue !== undefined && { max_value: maxValue }),
         total_leads_found: leads.length,
         limit_applied: limit
       };
@@ -823,7 +875,9 @@ server.tool(
         content: [{
           type: "text",
           text: JSON.stringify({
-            summary: `Found ${leads.length} leads matching the specified filters`,
+            summary: searchTitle
+              ? `Found ${leads.length} leads matching title search "${searchTitle}"`
+              : `Found ${leads.length} leads matching the specified filters`,
             filters_applied: filterSummary,
             total_found: leads.length,
             leads: summarizedLeads
