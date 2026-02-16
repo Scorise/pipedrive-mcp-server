@@ -188,7 +188,9 @@ server.tool(
   "Get deals from Pipedrive with flexible filtering options including search by title, date range, owner, stage, status, and more. Use 'get-users' tool first to find owner IDs.",
   {
     searchTitle: z.string().optional().describe("Search deals by title/name (partial matches supported)"),
-    daysBack: z.number().optional().describe("Number of days back to fetch deals based on last activity date (default: 365)"),
+    daysBack: z.number().optional().describe("Number of days back to fetch deals based on last activity date (default: 365, ignored if dateFrom/dateTo specified)"),
+    dateFrom: z.string().optional().describe("Start date for filtering deals by last_activity_date (format: YYYY-MM-DD, e.g. '2026-01-01')"),
+    dateTo: z.string().optional().describe("End date for filtering deals by last_activity_date (format: YYYY-MM-DD, e.g. '2026-02-16')"),
     ownerId: z.number().optional().describe("Filter deals by owner/user ID (use get-users tool to find IDs)"),
     stageId: z.number().optional().describe("Filter deals by stage ID"),
     status: z.enum(['open', 'won', 'lost', 'deleted']).optional().describe("Filter deals by status (default: open)"),
@@ -200,6 +202,8 @@ server.tool(
   async ({
     searchTitle,
     daysBack = 365,
+    dateFrom,
+    dateTo,
     ownerId,
     stageId,
     status = 'open',
@@ -244,14 +248,28 @@ server.tool(
 
       // Filter by date if not searching by title
       if (!searchTitle) {
-        const filterDate = new Date();
-        filterDate.setDate(filterDate.getDate() - daysBack);
+        // Use dateFrom/dateTo if provided, otherwise use daysBack
+        if (dateFrom || dateTo) {
+          const startDate = dateFrom ? new Date(dateFrom) : new Date(0); // Epoch if not specified
+          const endDate = dateTo ? new Date(dateTo) : new Date(); // Now if not specified
+          // Set endDate to end of day (23:59:59)
+          endDate.setHours(23, 59, 59, 999);
 
-        filteredDeals = filteredDeals.filter((deal: any) => {
-          if (!deal.last_activity_date) return false;
-          const dealActivityDate = new Date(deal.last_activity_date);
-          return dealActivityDate >= filterDate;
-        });
+          filteredDeals = filteredDeals.filter((deal: any) => {
+            if (!deal.last_activity_date) return false;
+            const dealActivityDate = new Date(deal.last_activity_date);
+            return dealActivityDate >= startDate && dealActivityDate <= endDate;
+          });
+        } else {
+          const filterDate = new Date();
+          filterDate.setDate(filterDate.getDate() - daysBack);
+
+          filteredDeals = filteredDeals.filter((deal: any) => {
+            if (!deal.last_activity_date) return false;
+            const dealActivityDate = new Date(deal.last_activity_date);
+            return dealActivityDate >= filterDate;
+          });
+        }
       }
 
       // Filter by owner if specified and not already applied in API call
@@ -292,8 +310,14 @@ server.tool(
       // Build filter summary for response
       const filterSummary = {
         ...(searchTitle && { search_title: searchTitle }),
-        ...(!searchTitle && { days_back: daysBack }),
-        ...(!searchTitle && { filter_date: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }),
+        ...(!searchTitle && (dateFrom || dateTo) && {
+          date_from: dateFrom || 'epoch',
+          date_to: dateTo || 'now'
+        }),
+        ...(!searchTitle && !dateFrom && !dateTo && {
+          days_back: daysBack,
+          filter_date: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        }),
         status: status,
         ...(ownerId && { owner_id: ownerId }),
         ...(stageId && { stage_id: stageId }),
@@ -772,7 +796,9 @@ server.tool(
   "Get all leads from Pipedrive with flexible filtering options including search by title, date range, owner, archived status, value, and more. Use 'get-users' tool first to find owner IDs.",
   {
     searchTitle: z.string().optional().describe("Search leads by title/name (partial matches supported)"),
-    daysBack: z.number().optional().describe("Number of days back to fetch leads based on add_time date (default: 365)"),
+    daysBack: z.number().optional().describe("Number of days back to fetch leads based on add_time date (default: 365, ignored if dateFrom/dateTo specified)"),
+    dateFrom: z.string().optional().describe("Start date for filtering leads by add_time (format: YYYY-MM-DD, e.g. '2026-01-01')"),
+    dateTo: z.string().optional().describe("End date for filtering leads by add_time (format: YYYY-MM-DD, e.g. '2026-02-16')"),
     ownerId: z.number().optional().describe("Filter leads by owner/user ID (use get-users tool to find IDs)"),
     archivedStatus: z.enum(['archived', 'not_archived', 'all']).optional().describe("Filter leads by archived status (default: not_archived)"),
     minValue: z.number().optional().describe("Minimum lead value filter"),
@@ -782,6 +808,8 @@ server.tool(
   async ({
     searchTitle,
     daysBack = 365,
+    dateFrom,
+    dateTo,
     ownerId,
     archivedStatus = 'not_archived',
     minValue,
@@ -803,16 +831,30 @@ server.tool(
       const response = await leadsApi.getLeads(params);
       let leads = response.data || [];
 
-      // Client-side filtering by date (daysBack)
-      if (!searchTitle && daysBack) {
-        const filterDate = new Date();
-        filterDate.setDate(filterDate.getDate() - daysBack);
+      // Client-side filtering by date
+      if (!searchTitle) {
+        // Use dateFrom/dateTo if provided, otherwise use daysBack
+        if (dateFrom || dateTo) {
+          const startDate = dateFrom ? new Date(dateFrom) : new Date(0); // Epoch if not specified
+          const endDate = dateTo ? new Date(dateTo) : new Date(); // Now if not specified
+          // Set endDate to end of day (23:59:59)
+          endDate.setHours(23, 59, 59, 999);
 
-        leads = leads.filter((lead: any) => {
-          if (!lead.add_time) return false;
-          const leadAddDate = new Date(lead.add_time);
-          return leadAddDate >= filterDate;
-        });
+          leads = leads.filter((lead: any) => {
+            if (!lead.add_time) return false;
+            const leadAddDate = new Date(lead.add_time);
+            return leadAddDate >= startDate && leadAddDate <= endDate;
+          });
+        } else if (daysBack) {
+          const filterDate = new Date();
+          filterDate.setDate(filterDate.getDate() - daysBack);
+
+          leads = leads.filter((lead: any) => {
+            if (!lead.add_time) return false;
+            const leadAddDate = new Date(lead.add_time);
+            return leadAddDate >= filterDate;
+          });
+        }
       }
 
       // Filter by search title
@@ -841,8 +883,14 @@ server.tool(
       // Build filter summary
       const filterSummary = {
         ...(searchTitle && { search_title: searchTitle }),
-        ...(!searchTitle && { days_back: daysBack }),
-        ...(!searchTitle && { filter_date: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }),
+        ...(!searchTitle && (dateFrom || dateTo) && {
+          date_from: dateFrom || 'epoch',
+          date_to: dateTo || 'now'
+        }),
+        ...(!searchTitle && !dateFrom && !dateTo && {
+          days_back: daysBack,
+          filter_date: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        }),
         archived_status: archivedStatus,
         ...(ownerId && { owner_id: ownerId }),
         ...(minValue !== undefined && { min_value: minValue }),
